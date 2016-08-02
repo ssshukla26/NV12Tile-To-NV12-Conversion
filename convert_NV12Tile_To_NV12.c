@@ -5,6 +5,9 @@
 #include <unistd.h>
 #include <sys/time.h>
 
+//Macro to define output format, either "nv12" or "yuv420p", no other options available
+#define OUTPUT_FORMAT "nv12"
+
 //Macro to round up a number "num" to the given number "X"
 #define ROUND_UP_X(num,x) (((num)+(x-1))&~(x-1))
 
@@ -15,8 +18,8 @@
  * wTiles               - No of tiles required horizontally for both Luma and Chroma Planes.
  * hTiles               - No of tiles required vertically for Luma Plane
  * hTiles_UV            - No of tiles required vertically for Chroma Plane
- * frame_size_src_Y     - Size of Luma Plane    
- * frame_size_src_UV    - Size of Chroma Plane 
+ * frame_size_src_Y     - Size of Luma Plane
+ * frame_size_src_UV    - Size of Chroma Plane
  * */
 typedef struct nv12tile_params {
     int wTiles;
@@ -40,7 +43,7 @@ int isValidResolution(int width)
 }
 
 /*
- * This function returns no of tiles required 
+ * This function returns no of tiles required
  * for given width.
  * */
 int calc_wTiles(int width)
@@ -49,7 +52,7 @@ int calc_wTiles(int width)
 }
 
 /*
- * This function returns no of tiles required 
+ * This function returns no of tiles required
  * for given height.
  * */
 int calc_hTiles(int height)
@@ -58,7 +61,7 @@ int calc_hTiles(int height)
 }
 
 /*
- * This function will returns padding required 
+ * This function will returns padding required
  * for given width and height.
  * */
 int calc_boundary_padding(int width,int height)
@@ -71,7 +74,7 @@ int calc_boundary_padding(int width,int height)
 }
 
 /*
- * This function will returns size required 
+ * This function will returns size required
  * for a plane of given width and height.
  * */
 int calc_plane_size(int width,int height)
@@ -80,7 +83,7 @@ int calc_plane_size(int width,int height)
 }
 
 /*
- * This function will initialize parameter needed 
+ * This function will initialize parameter needed
  * for a nv12 tile buffer of given width and height.
  * */
 struct nv12tile_params *nv12tile_parmas_init(int width,int height)
@@ -156,7 +159,7 @@ void NV12TileToNV12(char* dst_head,char* src_head,int wTiles,int hTiles)
         //Put src pointer at start of current row
         src = src_head;
 
-        //Copy Z and flip Z pattern to destination 
+        //Copy Z and flip Z pattern to destination
         for(Z = 0; Z < (wTiles/2); Z++)
         {
             //Put dst pointer at start of current row
@@ -228,9 +231,45 @@ void NV12TileToNV12(char* dst_head,char* src_head,int wTiles,int hTiles)
     }
 }
 
+/*
+ * This function is use to convert NV12 data to
+ * yuv420 planner data.
+ *
+ * frame  :- Pointer to a frame in NV12 format
+ * width  :- Width of frame
+ * height :- Height of frame
+ * */
+void NV12toYUV420Planner(char *frame,int width,int height)
+{
+    //Points to starting of chroma plane of incoming frame
+    char *frame_chroma = frame + (width * height);
+
+    //Length of a single chroma plane, either U or V doesn't matter
+    int single_chroma_plane_len = ((width * height)/4);
+
+    //Buffer to hold U and V planes
+    char *frame_chroma_planner = (char *) malloc(single_chroma_plane_len * 2 * sizeof(char));
+
+    //Logic to convert interleaved UV to planner U & planner V
+    int i,j;
+    for(i = 0, j = 0; i < (width * height/2); i=i+2, j++)
+    {
+        //Copy U Component
+        frame_chroma_planner[j] = frame_chroma[i];
+        //Copy V Component
+        frame_chroma_planner[j + single_chroma_plane_len] = frame_chroma[i+1];
+    }
+
+    //Overwrite planner U and V chroma components (frame_chroma_planner)
+    //on interleaved UV chroma component (frame_chroma) of the incoming frame
+    memcpy(frame_chroma,frame_chroma_planner,(single_chroma_plane_len * 2 * sizeof(char)));
+
+    //Free Buffer holding U and V planes
+    free(frame_chroma_planner);
+}
 
 /*
- * This function will initialize the incoming 
+ * This function will initialize the incoming
  * timeval structure with current date-time
  * */
 void startTimer(struct timeval *t_start)
@@ -240,8 +279,8 @@ void startTimer(struct timeval *t_start)
 }
 
 /*
- * This functions find difference between 
- * current date-time and the incoming 
+ * This functions find difference between
+ * current date-time and the incoming
  * timevale structure.
  *
  * Returns the difference in milliseconds.
@@ -352,6 +391,11 @@ int main(int argc, char* argv[])
                                     //break on reach of EOF
                                     break;
                                 }
+
+                                //If required format of output frame is yuv420p
+                                //then covert NV12 data to yuv420 planner data
+                                if(strcmp(OUTPUT_FORMAT,"yuv420p") == 0)
+                                    NV12toYUV420Planner(dst_buf,width,height);
 
                                 //Write to destination file
                                 if(frame_size_dst != write(outfile,dst_buf,frame_size_dst))

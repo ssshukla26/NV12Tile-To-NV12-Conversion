@@ -235,37 +235,41 @@ void NV12TileToNV12(char* dst_head,char* src_head,int wTiles,int hTiles)
  * This function is use to convert NV12 data to
  * yuv420 planner data.
  *
- * frame  :- Pointer to a frame in NV12 format
- * width  :- Width of frame
- * height :- Height of frame
+ * dst_buf  :- Pointer to a destination buffer
+ * src_buf  :- Pointer to a source buffer (in NV12 format)
+ * width    :- Width of source buffer
+ * height   :- Height of source buffer
+ *
+ * NOTE : Width and Height of source buffer is same as
+ * Width and height of destination buffer. That's will be
+ * the case always.
  * */
-void NV12toYUV420Planner(char *frame,int width,int height)
+void NV12toYUV420Planner(char *dst_buf,char *src_buf,int width,int height)
 {
-    //Points to starting of chroma plane of incoming frame
-    char *frame_chroma = frame + (width * height);
+    //Length of a luma plane
+    int luma_plane_len = (width * height);
 
     //Length of a single chroma plane, either U or V doesn't matter
     int single_chroma_plane_len = ((width * height)/4);
 
-    //Buffer to hold U and V planes
-    char *frame_chroma_planner = (char *) malloc(single_chroma_plane_len * 2 * sizeof(char));
+    //Points to starting of chroma plane of source buffer
+    char *src_chroma = src_buf + luma_plane_len;
 
-    //Logic to convert interleaved UV to planner U & planner V
+    //Points to starting of chroma plane of destination buffer
+    char *dst_chroma = dst_buf + luma_plane_len;
+
+    //Copy Y-Plane as it is from source to destination
+    memcpy(dst_buf,src_buf,luma_plane_len);
+
+    //Convert interleaved UV to planner UV and Copy to destination buffer
     int i,j;
-    for(i = 0, j = 0; i < (width * height/2); i=i+2, j++)
+    for(i = 0, j = 0; i < (single_chroma_plane_len * 2); i=i+2, j++)
     {
         //Copy U Component
-        frame_chroma_planner[j] = frame_chroma[i];
+        dst_chroma[j] = src_chroma[i];
         //Copy V Component
-        frame_chroma_planner[j + single_chroma_plane_len] = frame_chroma[i+1];
+        dst_chroma[j + single_chroma_plane_len] = src_chroma[i+1];
     }
-
-    //Overwrite planner U and V chroma components (frame_chroma_planner)
-    //on interleaved UV chroma component (frame_chroma) of the incoming frame
-    memcpy(frame_chroma,frame_chroma_planner,(single_chroma_plane_len * 2 * sizeof(char)));
-
-    //Free Buffer holding U and V planes
-    free(frame_chroma_planner);
 }
 
 /*
@@ -395,7 +399,24 @@ int main(int argc, char* argv[])
                                 //If required format of output frame is yuv420p
                                 //then covert NV12 data to yuv420 planner data
                                 if(strcmp(OUTPUT_FORMAT,"yuv420p") == 0)
-                                    NV12toYUV420Planner(dst_buf,width,height);
+                                {
+                                    //NOTE : using the same source and destination buffers
+                                    //as used in nv12 tile to nv12 conversion.
+
+                                    //Clear source buffer
+                                    memset(src_buf,'\0',sizeof(char) * frame_size_src);
+
+                                    //Copy destination buffer to source buffer
+                                    memcpy(src_buf,dst_buf,frame_size_dst);
+
+                                    //Clear destination buffer
+                                    memset(dst_buf,'\0',sizeof(char) * frame_size_dst);
+
+                                    //Convert source buffer in nv12 format
+                                    //to yuv420p format data and Copy to
+                                    //destination buffer
+                                    NV12toYUV420Planner(dst_buf,src_buf,width,height);
+                                }
 
                                 //Write to destination file
                                 if(frame_size_dst != write(outfile,dst_buf,frame_size_dst))

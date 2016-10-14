@@ -227,12 +227,12 @@ void NV12TileToNV12(char* dst_head,char* src_head,int wTiles,int hTiles)
  * src_head         :- source pointer, pointing to a extrapolated nv12 data
  * actual_width     :- Actual width of data in source buffer
  * width            :- Width of source buffer
- * actual_height    :- Actual height of data in source buffer
+ * height           :- height of source buffer
  * */
-void ConvertToActualNV12(char *dst_buf, char *src_buf, int actual_width, int width, int actual_height)
+void ConvertToActualNV12(char *dst_buf, char *src_buf, int actual_width, int width, int height)
 {
     int index = 0;
-    int uptoIndex = ((actual_height * 3)/2);
+    int uptoIndex = ((height * 3)/2);
 
     while(index <= uptoIndex)
     {
@@ -337,11 +337,8 @@ int main(int argc, char* argv[])
                     //Extrapolate width from the actual width such that it is always in multiple of 128
                     int width = ROUND_UP_X(actual_width,128);
 
-                    //Parse actual height from the command line
-                    int actual_height = atoi(argv[3]);
-
-                    //Extrapolate height from the actual height such that it is always in multiple of 32
-                    int height = ROUND_UP_X(actual_height,32);
+                    //Parse height from the command line
+                    int height = atoi(argv[3]);
 
                     //Initialize parameters needed for a nv12 tile buffer
                     struct nv12tile_params *params = nv12tile_parmas_init(width,height);
@@ -356,12 +353,12 @@ int main(int argc, char* argv[])
                     char *dst_buf = (char *) calloc(1,frame_size_src * sizeof(char));
 
                     //Size of a single frame in destination, destination is in nv12 format
-                    int frame_size_dst = (actual_width * actual_height * 3)/2;
+                    int frame_size_dst = (actual_width * height * 3)/2;
 
 
                     printf("TILE_SIZE = %d\n"
                             "wTiles=%d(%d)->(%d)\n"
-                            "hTiles=%d(%d)->(%d)\n"
+                            "hTiles=%d(%d)\n"
                             "hTiles_UV=%d\n"
                             "frame_size_src_Y=%d\n"
                             "frame_size_src_UV=%d\n"
@@ -369,7 +366,7 @@ int main(int argc, char* argv[])
                             "frame_size_dst=%d\n",
                             TILE_SIZE,
                             params->wTiles,actual_width,width,
-                            params->hTiles,actual_height,height,
+                            params->hTiles,height,
                             params->hTiles_UV,
                             params->frame_size_src_Y,
                             params->frame_size_src_UV,
@@ -413,7 +410,7 @@ int main(int argc, char* argv[])
 
                             //If extrapolation is performed, convert extrapolated data
                             //to actual data
-                            if((actual_width != width) || (actual_height != height))
+                            if((actual_width != width))
                             {
                                 //Clear source buffer
                                 memset(src_buf,'\0',sizeof(char) * frame_size_src);
@@ -425,7 +422,7 @@ int main(int argc, char* argv[])
                                 memset(dst_buf,'\0',sizeof(char) * frame_size_src);
 
                                 //Convert extrapolated NV12 data to actual NV12 data
-                                ConvertToActualNV12(dst_buf, src_buf, actual_width, width, actual_height);
+                                ConvertToActualNV12(dst_buf, src_buf, actual_width, width, height);
                             }
 
                             //If required format of output frame is yuv420p
@@ -447,7 +444,7 @@ int main(int argc, char* argv[])
                                 //Convert source buffer in nv12 format
                                 //to yuv420p format data and Copy to
                                 //destination buffer
-                                NV12toYUV420Planner(dst_buf, src_buf, actual_width, actual_height);
+                                NV12toYUV420Planner(dst_buf, src_buf, actual_width, height);
                             }
 
                             //Write to destination file
@@ -490,7 +487,7 @@ int main(int argc, char* argv[])
                     close(outfile);
 
                     printf("\rNo of frames converted : %d in %lf seconds\n",frameCount,((double)timeelapsed/1000.0));
-                    printf("Display resolution of each frame is %dx%d\n", actual_width, actual_height);
+                    printf("Display resolution of each frame is %dx%d\n", actual_width, height);
                 }
                 else
                 {

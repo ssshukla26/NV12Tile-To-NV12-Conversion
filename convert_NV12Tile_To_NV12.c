@@ -77,6 +77,9 @@ struct nv12tile_params *nv12tile_parmas_init(int width,int height)
 {
     struct nv12tile_params *p = calloc(1,sizeof(struct nv12tile_params));
 
+    //Extrapolate width
+    width = ROUND_UP_X(width,128);
+
     //Minimum no of columns required
     p->wTiles = calc_wTiles(width);
 
@@ -225,21 +228,41 @@ void NV12TileToNV12(char* dst_head,char* src_head,int wTiles,int hTiles)
  *
  * dst_head         :- destination pointer to store data in actual nv12 data
  * src_head         :- source pointer, pointing to a extrapolated nv12 data
- * actual_width     :- Actual width of data in source buffer
- * width            :- Width of source buffer
- * height           :- height of source buffer
+ * width            :- Actual width of data in source buffer
+ * height           :- Height of source buffer
+ * frame_size_src   :- Size of source buffer
  * */
-void ConvertToActualNV12(char *dst_buf, char *src_buf, int actual_width, int width, int height)
+void ConvertToActualNV12(char *dst_buf, char *src_buf, int width, int height, int frame_size_src)
 {
-    int index = 0;
-    int uptoIndex = ((height * 3)/2);
-
-    while(index <= uptoIndex)
+    //Check if width is not equal to extrapolated width
+    //then perform the conversion
+    if(width != ROUND_UP_X(width,128))
     {
-        //Copy source to destination
-        memcpy(dst_buf + (index * actual_width), src_buf + (index * width), (actual_width * sizeof (char)));
+        int index = 0;
 
-        index++;
+        //Max no. of rows in source buffer
+        int uptoIndex = ((height * 3)/2);
+
+        //Width of source data buffer
+        int extrapolated_width = ROUND_UP_X(width,128);
+
+        //Clear source buffer
+        memset(src_buf,'\0',sizeof(char) * frame_size_src);
+
+        //Copy destination buffer to source buffer
+        memcpy(src_buf, dst_buf, frame_size_src);
+
+        //Clear destination buffer
+        memset(dst_buf,'\0',sizeof(char) * frame_size_src);
+
+        //Convert extrapolated NV12 data to actual NV12 data
+        while(index <= uptoIndex)
+        {
+            //Copy source to destination
+            memcpy(dst_buf + (index * width), src_buf + (index * extrapolated_width), (width * sizeof (char)));
+
+            index++;
+        }
     }
 }
 
@@ -331,11 +354,8 @@ int main(int argc, char* argv[])
                 //Open output/destination file for writing
                 if(-1 != (outfile = open(argv[4],O_WRONLY | O_CREAT,0775)))
                 {
-                    //Parse actual width from the command line
-                    int actual_width = atoi(argv[2]);
-
-                    //Extrapolate width from the actual width such that it is always in multiple of 128
-                    int width = ROUND_UP_X(actual_width,128);
+                    //Parse width from the command line
+                    int width = atoi(argv[2]);
 
                     //Parse height from the command line
                     int height = atoi(argv[3]);
@@ -353,7 +373,8 @@ int main(int argc, char* argv[])
                     char *dst_buf = (char *) calloc(1,frame_size_src * sizeof(char));
 
                     //Size of a single frame in destination, destination is in nv12 format
-                    int frame_size_dst = (actual_width * height * 3)/2;
+                    //NOTE : width here is actual width
+                    int frame_size_dst = (width * height * 3)/2;
 
 
                     printf("TILE_SIZE = %d\n"
@@ -365,8 +386,11 @@ int main(int argc, char* argv[])
                             "frame_size_src=%d\n"
                             "frame_size_dst=%d\n",
                             TILE_SIZE,
-                            params->wTiles,actual_width,width,
-                            params->hTiles,height,
+                            params->wTiles,
+                            width, //NOTE : width here is actual width
+                            ROUND_UP_X(width,128),
+                            params->hTiles,
+                            height,
                             params->hTiles_UV,
                             params->frame_size_src_Y,
                             params->frame_size_src_UV,
@@ -400,7 +424,8 @@ int main(int argc, char* argv[])
                             if(params->frame_size_src_UV == read(infile,src_buf,params->frame_size_src_UV))
                             {
                                 //Convert UV plane from nv12 tile to nv12 format
-                                NV12TileToNV12(dst_buf+(width * height),src_buf,params->wTiles,params->hTiles_UV);
+                                NV12TileToNV12(dst_buf+(ROUND_UP_X(width,128) * height),
+                                        src_buf,params->wTiles,params->hTiles_UV);
                             }
                             else
                             {
@@ -408,22 +433,9 @@ int main(int argc, char* argv[])
                                 break;
                             }
 
-                            //If extrapolation is performed, convert extrapolated data
-                            //to actual data
-                            if((actual_width != width))
-                            {
-                                //Clear source buffer
-                                memset(src_buf,'\0',sizeof(char) * frame_size_src);
-
-                                //Copy destination buffer to source buffer
-                                memcpy(src_buf, dst_buf, frame_size_src);
-
-                                //Clear destination buffer
-                                memset(dst_buf,'\0',sizeof(char) * frame_size_src);
-
-                                //Convert extrapolated NV12 data to actual NV12 data
-                                ConvertToActualNV12(dst_buf, src_buf, actual_width, width, height);
-                            }
+                            //If extrapolation is performed, convert extrapolated data to actual data
+                            //NOTE : width here is actual width
+                            ConvertToActualNV12(dst_buf, src_buf, width, height, frame_size_src);
 
                             //If required format of output frame is yuv420p
                             //then covert NV12 data to yuv420 planner data
@@ -444,7 +456,8 @@ int main(int argc, char* argv[])
                                 //Convert source buffer in nv12 format
                                 //to yuv420p format data and Copy to
                                 //destination buffer
-                                NV12toYUV420Planner(dst_buf, src_buf, actual_width, height);
+                                //NOTE : width here is actual width
+                                NV12toYUV420Planner(dst_buf, src_buf, width, height);
                             }
 
                             //Write to destination file
@@ -487,7 +500,8 @@ int main(int argc, char* argv[])
                     close(outfile);
 
                     printf("\rNo of frames converted : %d in %lf seconds\n",frameCount,((double)timeelapsed/1000.0));
-                    printf("Display resolution of each frame is %dx%d\n", actual_width, height);
+                    //NOTE : width here is actual width
+                    printf("Display resolution of each frame is %dx%d\n", width, height);
                 }
                 else
                 {

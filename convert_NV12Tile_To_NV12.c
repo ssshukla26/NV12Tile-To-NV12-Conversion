@@ -226,34 +226,31 @@ void NV12TileToNV12(char* dst_head,char* src_head,int wTiles,int hTiles)
  * This function is use to convert extrapolated nv12 data
  * to actual nv12 data.
  *
- * dst_buf          :- Destination pointer to pointing to extrapolated nv12 data
- * width            :- Actual width of data in destination buffer
- * height           :- Height of destination buffer
- * frame_size_src   :- Size of destination buffer
+ * data     :- Pointer pointing to extrapolated nv12 data
+ * width    :- Actual width of data in buffer
+ * height   :- Height of data buffer
  * */
-void ConvertToActualNV12(char *dst_buf, int width, int height, int frame_size_src)
+void ConvertToActualNV12(char *data, int width, int height)
 {
     //Check if width is not equal to extrapolated width
     //then perform the conversion
     if(width != ROUND_UP_X(width,128))
     {
+        //Index of current row
         int index = 0;
 
-        //Max no. of rows in source buffer
+        //Max no. of rows in data buffer
         int uptoIndex = ((height * 3)/2);
 
-        //Width of source data buffer
+        //Extrapolated width of data buffer
         int extrapolated_width = ROUND_UP_X(width,128);
-
-        //Actual destination buffer pointer
-        char *dst_buf_actual = dst_buf;
 
         //Convert extrapolated NV12 data to actual NV12 data
         while(index <= uptoIndex)
         {
             //Rectify each strides in destination buffer containing extrapolated data, so that each stride will contain
             //actual data
-            memcpy(dst_buf + (index * width), dst_buf_actual + (index * extrapolated_width), (width * sizeof (char)));
+            memcpy(data + (index * width), data + (index * extrapolated_width), (width * sizeof (char)));
 
             index++;
         }
@@ -429,7 +426,7 @@ int main(int argc, char* argv[])
 
                             //If extrapolation is performed, convert extrapolated data to actual data
                             //NOTE : width here is actual width
-                            ConvertToActualNV12(dst_buf, width, height, frame_size_src);
+                            ConvertToActualNV12(dst_buf, width, height);
 
                             //If required format of output frame is yuv420p
                             //then covert NV12 data to yuv420 planner data

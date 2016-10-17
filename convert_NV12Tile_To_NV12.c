@@ -226,13 +226,12 @@ void NV12TileToNV12(char* dst_head,char* src_head,int wTiles,int hTiles)
  * This function is use to convert extrapolated nv12 data
  * to actual nv12 data.
  *
- * dst_head         :- destination pointer to store data in actual nv12 data
- * src_head         :- source pointer, pointing to a extrapolated nv12 data
- * width            :- Actual width of data in source buffer
- * height           :- Height of source buffer
- * frame_size_src   :- Size of source buffer
+ * dst_buf          :- Destination pointer to pointing to extrapolated nv12 data
+ * width            :- Actual width of data in destination buffer
+ * height           :- Height of destination buffer
+ * frame_size_src   :- Size of destination buffer
  * */
-void ConvertToActualNV12(char *dst_buf, char *src_buf, int width, int height, int frame_size_src)
+void ConvertToActualNV12(char *dst_buf, int width, int height, int frame_size_src)
 {
     //Check if width is not equal to extrapolated width
     //then perform the conversion
@@ -246,20 +245,15 @@ void ConvertToActualNV12(char *dst_buf, char *src_buf, int width, int height, in
         //Width of source data buffer
         int extrapolated_width = ROUND_UP_X(width,128);
 
-        //Clear source buffer
-        memset(src_buf,'\0',sizeof(char) * frame_size_src);
-
-        //Copy destination buffer to source buffer
-        memcpy(src_buf, dst_buf, frame_size_src);
-
-        //Clear destination buffer
-        memset(dst_buf,'\0',sizeof(char) * frame_size_src);
+        //Actual destination buffer pointer
+        char *dst_buf_actual = dst_buf;
 
         //Convert extrapolated NV12 data to actual NV12 data
         while(index <= uptoIndex)
         {
-            //Copy source to destination
-            memcpy(dst_buf + (index * width), src_buf + (index * extrapolated_width), (width * sizeof (char)));
+            //Rectify each strides in destination buffer containing extrapolated data, so that each stride will contain
+            //actual data
+            memcpy(dst_buf + (index * width), dst_buf_actual + (index * extrapolated_width), (width * sizeof (char)));
 
             index++;
         }
@@ -435,7 +429,7 @@ int main(int argc, char* argv[])
 
                             //If extrapolation is performed, convert extrapolated data to actual data
                             //NOTE : width here is actual width
-                            ConvertToActualNV12(dst_buf, src_buf, width, height, frame_size_src);
+                            ConvertToActualNV12(dst_buf, width, height, frame_size_src);
 
                             //If required format of output frame is yuv420p
                             //then covert NV12 data to yuv420 planner data

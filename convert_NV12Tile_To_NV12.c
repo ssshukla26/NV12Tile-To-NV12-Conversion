@@ -304,7 +304,7 @@ void ConvertToActualNV12(struct nv12tile_params *params)
         int uptoIndex = ((params->height * 3)/2);
 
         //Convert extrapolated NV12 data to actual NV12 data
-        while(index <= uptoIndex)
+        while(index < uptoIndex)
         {
             //Rectify each strides in destination buffer containing extrapolated data,
             //so that each strides will contain actual data.

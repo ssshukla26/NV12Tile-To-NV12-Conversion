@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <fcntl.h>
 #include <string.h>
 #include <unistd.h>
@@ -9,10 +10,13 @@
 #define OUTPUT_FORMAT "nv12"
 
 //Macro to round up a number "num" to the given number "X"
-#define ROUND_UP_X(num,x) (((num)+(x-1))&~(x-1))
+#define ROUND_UP_X(num, x) (((num)+(x-1))&~(x-1))
 
 //Size of a single tile
 #define TILE_SIZE (64*32)
+
+//Data type of a single pixel
+#define pixel uint8_t
 
 /* Structure to hold required parameters for a nv12 tile buffer.
  * wTiles               - No of tiles required horizontally for both Luma and Chroma Planes.
@@ -22,11 +26,20 @@
  * frame_size_src_UV    - Size of Chroma Plane
  * */
 typedef struct nv12tile_params {
+    int width;
+    int height;
+    int ex_width;
+    int ex_height;
     int wTiles;
     int hTiles;
     int hTiles_UV;
     int frame_size_src_Y;
     int frame_size_src_UV;
+    int frame_size_src;
+    int frame_size_dst;
+    pixel *src_buf;
+    pixel *dst_buf;
+    int frameCount;
 } nv12tile_params;
 
 /*
@@ -35,7 +48,7 @@ typedef struct nv12tile_params {
  * */
 int calc_wTiles(int width)
 {
-    return (ROUND_UP_X(width,128)/64);
+    return (ROUND_UP_X(width, 128)/64);
 }
 
 /*
@@ -44,64 +57,114 @@ int calc_wTiles(int width)
  * */
 int calc_hTiles(int height)
 {
-    return (ROUND_UP_X(height,32)/32);
+    return (ROUND_UP_X(height, 32)/32);
 }
 
 /*
  * This function will returns padding required
- * for given width and height.
+ * for given tiles (wTiles x hTiles).
  * */
-int calc_boundary_padding(int width,int height)
+int calc_boundary_padding(int wTiles, int hTiles)
 {
-    int wTiles = calc_wTiles(width);
-    int hTiles = calc_hTiles(height);
     float data_size = ((float)((float)(((float)wTiles * (float)hTiles * (float)TILE_SIZE)/(float)(4 * TILE_SIZE))));
+
     data_size = data_size - (float)((int)data_size);
+
     return (int)(data_size * (float)(4 * TILE_SIZE));
 }
 
 /*
  * This function will returns size required
- * for a plane of given width and height.
+ * for a plane of given tiles (wTiles x hTiles).
  * */
-int calc_plane_size(int width,int height)
+int calc_plane_size(int wTiles, int hTiles)
 {
-    return ((TILE_SIZE * calc_wTiles(width) * calc_hTiles(height)) + calc_boundary_padding(width,height));
+    return ((TILE_SIZE * wTiles * hTiles) + calc_boundary_padding(wTiles, hTiles));
 }
 
 /*
  * This function will initialize parameter needed
  * for a nv12 tile buffer of given width and height.
  * */
-struct nv12tile_params *nv12tile_parmas_init(int width,int height)
+struct nv12tile_params *nv12tile_params_init(int _width, int _height)
 {
-    struct nv12tile_params *p = calloc(1,sizeof(struct nv12tile_params));
+    struct nv12tile_params *params = calloc(1, sizeof(struct nv12tile_params));
+
+    //width
+    params->width = _width;
+
+    //height
+    params->height = _height;
 
     //Extrapolate width
-    width = ROUND_UP_X(width,128);
+    params->ex_width = ROUND_UP_X(params->width, 128);
+
+    //Extrapolate height
+    params->ex_height = ROUND_UP_X(params->height, 32);
 
     //Minimum no of columns required
-    p->wTiles = calc_wTiles(width);
+    params->wTiles = calc_wTiles(params->width);
 
     //Minimum no of rows required for Y plane
-    p->hTiles = calc_hTiles(height);
+    params->hTiles = calc_hTiles(params->height);
 
     //Minimum no of rows required for UV plane
-    p->hTiles_UV = calc_hTiles(height/2);
+    params->hTiles_UV = calc_hTiles(params->height/2);
 
     //Size of Luma/Y Plane
-    p->frame_size_src_Y = calc_plane_size(width,height);
+    params->frame_size_src_Y = calc_plane_size(params->wTiles, params->hTiles);
 
     //Size of Chroma/UV Plane
-    p->frame_size_src_UV = calc_plane_size(width,height/2);
+    params->frame_size_src_UV = calc_plane_size(params->wTiles, params->hTiles_UV);
 
-    return p;
+    //Size of a single frame in source, source is in nv12 tile format
+    params->frame_size_src = params->frame_size_src_Y + params->frame_size_src_UV;
+
+    //Size of a single frame in destination, destination is in nv12 format
+    params->frame_size_dst = (params->width * params->height * 3)/2;
+
+    //Buffer to accumulate a frame from the source
+    params->src_buf = (pixel *) calloc(1, params->frame_size_src * sizeof(pixel));
+
+    //Buffer to accumulate a frame for the destination
+    params->dst_buf = (pixel *) calloc(1, params->frame_size_src * sizeof(pixel));
+
+    //Variable to count no of frames converted from tile to linear format i.e. nv12 tile to nv12 format
+    params->frameCount = 1;
+
+    return params;
+}
+
+/*
+ * This function will de-initialize nv12tile parameters.
+ * */
+void nv12tile_params_deinit(struct nv12tile_params *params)
+{
+    //Free params
+    if(params) {
+
+        //Free source buffer
+        if(params->src_buf) {
+
+            free(params->src_buf);
+            params->src_buf = NULL;
+        }
+
+        //Free destination buffer
+        if(params->dst_buf) {
+
+            free(params->dst_buf);
+            params->dst_buf = NULL;
+        }
+
+        free(params);
+    }
 }
 
 /*
  * This functions copy a single tile from source to destination.
  * */
-void copyTile(char *dst,char **src,int wTiles)
+void copyTile(pixel *dst, pixel **src, int wTiles)
 {
     //Loop variable
     int loop = 0;
@@ -110,7 +173,7 @@ void copyTile(char *dst,char **src,int wTiles)
     for(loop=0;loop<32;loop++)
     {
         //Copy a single row from source to destination
-        memcpy(dst,*src,64 * sizeof(char));
+        memcpy(dst, *src, 64 * sizeof(pixel));
 
         //Move source pointer to next row
         *src = *src + 64;
@@ -129,7 +192,7 @@ void copyTile(char *dst,char **src,int wTiles)
  * wTiles :- No of horizontal tiles
  * hTiles :- No of vertical tiles
  * */
-void NV12TileToNV12(char* dst_head,char* src_head,int wTiles,int hTiles)
+void NV12TileToNV12(pixel *dst_head, pixel *src_head, int wTiles, int hTiles)
 {
     //Loop variable
     int loop = 0;
@@ -138,10 +201,10 @@ void NV12TileToNV12(char* dst_head,char* src_head,int wTiles,int hTiles)
     int Z = 0;
 
     //Assign source to source head pointer
-    char *src = src_head;
+    pixel *src = src_head;
 
     //Assign destination to destination head pointer
-    char *dst = dst_head;
+    pixel *dst = dst_head;
 
     //For a proper Z Flip Z pattern two consecutive row are needed to be processed
     for(loop = 0; loop < (hTiles%2 == 0 ? hTiles : hTiles-1); loop=loop+2)
@@ -161,20 +224,20 @@ void NV12TileToNV12(char* dst_head,char* src_head,int wTiles,int hTiles)
 
                 //Tile Nos: 0-8-16-...
                 dst = dst + (Z * 2 * 64);
-                copyTile(dst,&src,wTiles);
+                copyTile(dst, &src, wTiles);
 
                 //Tile Nos: 1-9-17-...
                 dst = dst + 64;
-                copyTile(dst,&src,wTiles);
+                copyTile(dst, &src, wTiles);
 
                 //Tile Nos: 2-10-18-...
                 dst = dst_head + (wTiles * TILE_SIZE);
                 dst = dst + (Z * 2 * 64);
-                copyTile(dst,&src,wTiles);
+                copyTile(dst, &src, wTiles);
 
                 //Tile Nos: 3-11-19-...
                 dst = dst + 64;
-                copyTile(dst,&src,wTiles);
+                copyTile(dst, &src, wTiles);
             }
             else
             {
@@ -183,19 +246,19 @@ void NV12TileToNV12(char* dst_head,char* src_head,int wTiles,int hTiles)
                 //Tile Nos: 4-12-...
                 dst = dst_head + (wTiles * TILE_SIZE);
                 dst = dst + (Z * 2 * 64);
-                copyTile(dst,&src,wTiles);
+                copyTile(dst, &src, wTiles);
 
                 //Tile Nos: 5-13...
                 dst = dst + 64;
-                copyTile(dst,&src,wTiles);
+                copyTile(dst, &src, wTiles);
 
                 //Tile Nos: 6-14-...
                 dst = dst_head + (Z * 2 * 64);
-                copyTile(dst,&src,wTiles);
+                copyTile(dst, &src, wTiles);
 
                 //Tile Nos: 7-15-...
                 dst = dst + 64;
-                copyTile(dst,&src,wTiles);
+                copyTile(dst, &src, wTiles);
             }
         }
 
@@ -216,7 +279,7 @@ void NV12TileToNV12(char* dst_head,char* src_head,int wTiles,int hTiles)
         for(loop = 0; loop < wTiles ; loop++)
         {
             dst = dst_head + (loop * 64);
-            copyTile(dst,&src,wTiles);
+            copyTile(dst, &src, wTiles);
         }
     }
 }
@@ -226,35 +289,56 @@ void NV12TileToNV12(char* dst_head,char* src_head,int wTiles,int hTiles)
  * This function is use to convert extrapolated nv12 data
  * to actual nv12 data.
  *
- * data     :- Pointer pointing to extrapolated nv12 data
- * width    :- Actual width of data in buffer
- * height   :- Height of data buffer
+ * params :- pointer to nv12tile_params structure
  * */
-void ConvertToActualNV12(char *data, int width, int height)
+void ConvertToActualNV12(struct nv12tile_params *params)
 {
     //Check if width is not equal to extrapolated width
     //then perform the conversion
-    if(width != ROUND_UP_X(width,128))
+    if(params->width != params->ex_width)
     {
         //Index of current row
         int index = 0;
 
         //Max no. of rows in data buffer
-        int uptoIndex = ((height * 3)/2);
-
-        //Extrapolated width of data buffer
-        int extrapolated_width = ROUND_UP_X(width,128);
+        int uptoIndex = ((params->height * 3)/2);
 
         //Convert extrapolated NV12 data to actual NV12 data
         while(index <= uptoIndex)
         {
-            //Rectify each strides in destination buffer containing extrapolated data, so that each stride will contain
-            //actual data
-            memcpy(data + (index * width), data + (index * extrapolated_width), (width * sizeof (char)));
+            //Rectify each strides in destination buffer containing extrapolated data,
+            //so that each strides will contain actual data.
+            memcpy(params->dst_buf + (index * params->width),
+                    params->dst_buf + (index * params->ex_width),
+                    (params->width * sizeof (pixel)));
 
             index++;
         }
     }
+}
+
+/*
+ * This function is use to convert an entire frame from nv12 tile format
+ * to nv12 format.
+ *
+ * params :- pointer to nv12tile_params structure
+ * */
+void ConvertNV12TileToNV12Frame(struct nv12tile_params *params)
+{
+    //Convert Y plane from nv12 tile to nv12 format
+    NV12TileToNV12(params->dst_buf,
+            params->src_buf,
+            params->wTiles,
+            params->hTiles);
+
+    //Convert UV plane from nv12 tile to nv12 format
+    NV12TileToNV12(params->dst_buf + (params->ex_width * params->height),
+            params->src_buf + params->frame_size_src_Y,
+            params->wTiles,
+            params->hTiles_UV);
+
+    //If extrapolation is performed, convert extrapolated data to actual data
+    ConvertToActualNV12(params);
 }
 
 /*
@@ -270,7 +354,7 @@ void ConvertToActualNV12(char *data, int width, int height)
  * Width and height of destination buffer. That's will be
  * the case always.
  * */
-void NV12toYUV420Planner(char *dst_buf,char *src_buf,int width,int height)
+void NV12toYUV420Planner(pixel *dst_buf, pixel *src_buf, int width, int height)
 {
     //Length of a luma plane
     int luma_plane_len = (width * height);
@@ -279,16 +363,16 @@ void NV12toYUV420Planner(char *dst_buf,char *src_buf,int width,int height)
     int single_chroma_plane_len = ((width * height)/4);
 
     //Points to starting of chroma plane of source buffer
-    char *src_chroma = src_buf + luma_plane_len;
+    pixel *src_chroma = src_buf + luma_plane_len;
 
     //Points to starting of chroma plane of destination buffer
-    char *dst_chroma = dst_buf + luma_plane_len;
+    pixel *dst_chroma = dst_buf + luma_plane_len;
 
     //Copy Y-Plane as it is from source to destination
-    memcpy(dst_buf,src_buf,luma_plane_len);
+    memcpy(dst_buf, src_buf, luma_plane_len);
 
     //Convert interleaved UV to planner UV and Copy to destination buffer
-    int i,j;
+    int i, j;
     for(i = 0, j = 0; i < (single_chroma_plane_len * 2); i=i+2, j++)
     {
         //Copy U Component
@@ -309,9 +393,72 @@ void startTimer(struct timeval *t_start)
 }
 
 /*
+ * This function will read frames in nv12 tile format from input file,
+ * converts the frame to nv12 or yuv420p format and write it to output file.
+ *
+ * params  :- pointer to nv12tile_params structure.
+ * infile  :- input file descriptor.
+ * outfile :- output file descriptor.
+ * */
+void read_convert_write(struct nv12tile_params *params, int infile, int outfile)
+{
+    //Loop to convert nv12 tile formated frames in input file to nv12 format
+    //and store it in a output file
+    while(1)
+    {
+        //Read from source file
+        if(params->frame_size_src == read(infile, params->src_buf, params->frame_size_src))
+        {
+            //Convert frames from NV12 tile format to NV12 format
+            ConvertNV12TileToNV12Frame(params);
+
+            //If required format of output frame is yuv420p
+            //then covert NV12 data to yuv420 planner data
+            if(strcmp(OUTPUT_FORMAT, "yuv420p") == 0)
+            {
+                //NOTE : using the same source and destination buffers
+                //as used in nv12 tile to nv12 conversion.
+
+                //Clear source buffer
+                memset(params->src_buf, '\0', sizeof(pixel) * params->frame_size_src);
+
+                //Copy destination buffer to source buffer
+                memcpy(params->src_buf, params->dst_buf, params->frame_size_src);
+
+                //Clear destination buffer
+                memset(params->dst_buf, '\0', sizeof(pixel) * params->frame_size_src);
+
+                //Convert source buffer in nv12 format
+                //to yuv420p format data and Copy to
+                //destination buffer
+                NV12toYUV420Planner(params->dst_buf, params->src_buf, params->width, params->height);
+            }
+
+            //Write to destination file
+            if(params->frame_size_dst != write(outfile, params->dst_buf, params->frame_size_dst))
+            {
+                perror("Error writing output file :");
+                break;
+            }
+        }
+        else
+        {
+            //EOF reached
+            break;
+        }
+
+        printf("No of frames converted : %d\r", params->frameCount++); fflush(stdout);
+
+        //Clear source and destination buffer
+        memset(params->src_buf, '\0', sizeof(pixel) * params->frame_size_src);
+        memset(params->dst_buf, '\0', sizeof(pixel) * params->frame_size_src);
+    }
+}
+
+/*
  * This functions find difference between
  * current date-time and the incoming
- * timevale structure.
+ * timeval structure.
  *
  * Returns the difference in milliseconds.
  * */
@@ -329,48 +476,29 @@ long stopTimer(struct timeval *t_start)
     return (((seconds) * 1000 + useconds/1000.0) + 0.5);
 }
 
-int main(int argc, char* argv[])
+int main(int argc, char *argv[])
 {
     //Check : command line must consist of all required arguments
     if(5 == argc)
     {
         //Check : input and output file shouldn't be same
-        if(strcmp(argv[1],argv[4]) != 0)
+        if(strcmp(argv[1], argv[4]) != 0)
         {
             int infile = -1;
             //Open input/source file for reading
-            if(-1 != (infile = open(argv[1],O_RDONLY)))
+            if(-1 != (infile = open(argv[1], O_RDONLY)))
             {
                 int outfile = -1;
                 //Open output/destination file for writing
-                if(-1 != (outfile = open(argv[4],O_WRONLY | O_CREAT,0775)))
+                if(-1 != (outfile = open(argv[4], O_WRONLY | O_CREAT, 0775)))
                 {
-                    //Parse width from the command line
-                    int width = atoi(argv[2]);
-
-                    //Parse height from the command line
-                    int height = atoi(argv[3]);
-
                     //Initialize parameters needed for a nv12 tile buffer
-                    struct nv12tile_params *params = nv12tile_parmas_init(width,height);
+                    struct nv12tile_params *params = nv12tile_params_init(atoi(argv[2]), atoi(argv[3]));
 
-                    //Size of a single frame in source, source is in nv12 tile format
-                    int frame_size_src = params->frame_size_src_Y + params->frame_size_src_UV;
-
-                    //Buffer to accumulate a frame from the source
-                    char *src_buf = (char *) calloc(1,frame_size_src * sizeof(char));
-
-                    //Buffer to accumulate a frame for the destination
-                    char *dst_buf = (char *) calloc(1,frame_size_src * sizeof(char));
-
-                    //Size of a single frame in destination, destination is in nv12 format
-                    //NOTE : width here is actual width
-                    int frame_size_dst = (width * height * 3)/2;
-
-
+                    //Debug print
                     printf("TILE_SIZE = %d\n"
                             "wTiles=%d(%d)->(%d)\n"
-                            "hTiles=%d(%d)\n"
+                            "hTiles=%d(%d)->(%d)\n"
                             "hTiles_UV=%d\n"
                             "frame_size_src_Y=%d\n"
                             "frame_size_src_UV=%d\n"
@@ -378,18 +506,16 @@ int main(int argc, char* argv[])
                             "frame_size_dst=%d\n",
                             TILE_SIZE,
                             params->wTiles,
-                            width, //NOTE : width here is actual width
-                            ROUND_UP_X(width,128),
+                            params->width,
+                            params->ex_width,
                             params->hTiles,
-                            height,
+                            params->height,
+                            params->ex_height,
                             params->hTiles_UV,
                             params->frame_size_src_Y,
                             params->frame_size_src_UV,
-                            frame_size_src,
-                            frame_size_dst);
-
-                    //Variable to count no of frames converted from tile to linear format i.e. nv12 tile to nv12 format
-                    int frameCount = 1;
+                            params->frame_size_src,
+                            params->frame_size_dst);
 
                     //Variables required to calculate time elapsed for converting N (frameCount) frames
                     struct timeval start;
@@ -398,101 +524,21 @@ int main(int argc, char* argv[])
                     //Start timer
                     startTimer(&start);
 
-                    //Loop to convert nv12 tile formated frames in input file to nv12 format
-                    //and store it in a output file
-                    while(1)
-                    {
-                        //Read from source file
-                        if(params->frame_size_src_Y == read(infile,src_buf,params->frame_size_src_Y))
-                        {
-                            //Convert Y plane from nv12 tile to nv12 format
-                            NV12TileToNV12(dst_buf,src_buf,params->wTiles,params->hTiles);
-
-                            //Clear source buffer
-                            memset(src_buf,'\0',sizeof(char) * frame_size_src);
-
-                            //Read from source file
-                            if(params->frame_size_src_UV == read(infile,src_buf,params->frame_size_src_UV))
-                            {
-                                //Convert UV plane from nv12 tile to nv12 format
-                                NV12TileToNV12(dst_buf+(ROUND_UP_X(width,128) * height),
-                                        src_buf,params->wTiles,params->hTiles_UV);
-                            }
-                            else
-                            {
-                                //break on reach of EOF
-                                break;
-                            }
-
-                            //If extrapolation is performed, convert extrapolated data to actual data
-                            //NOTE : width here is actual width
-                            ConvertToActualNV12(dst_buf, width, height);
-
-                            //If required format of output frame is yuv420p
-                            //then covert NV12 data to yuv420 planner data
-                            if(strcmp(OUTPUT_FORMAT,"yuv420p") == 0)
-                            {
-                                //NOTE : using the same source and destination buffers
-                                //as used in nv12 tile to nv12 conversion.
-
-                                //Clear source buffer
-                                memset(src_buf,'\0',sizeof(char) * frame_size_src);
-
-                                //Copy destination buffer to source buffer
-                                memcpy(src_buf, dst_buf, frame_size_src);
-
-                                //Clear destination buffer
-                                memset(dst_buf,'\0',sizeof(char) * frame_size_src);
-
-                                //Convert source buffer in nv12 format
-                                //to yuv420p format data and Copy to
-                                //destination buffer
-                                //NOTE : width here is actual width
-                                NV12toYUV420Planner(dst_buf, src_buf, width, height);
-                            }
-
-                            //Write to destination file
-                            if(frame_size_dst != write(outfile,dst_buf,frame_size_dst))
-                            {
-                                perror("Error writing output file :");
-                                break;
-                            }
-                        }
-                        else
-                        {
-                            //break on reach of EOF
-                            break;
-                        }
-
-                        printf("No of frames converted : %d\r",frameCount++);
-                        fflush(stdout);
-
-                        //Clear source and destination buffer
-                        memset(src_buf,'\0',sizeof(char) * frame_size_src);
-                        memset(dst_buf,'\0',sizeof(char) * frame_size_src);
-                    }
+                    //Read from infile, convert frames and write to outfile
+                    read_convert_write(params, infile, outfile);
 
                     //Stop timer
                     timeelapsed = stopTimer(&start);
 
-                    //Free params
-                    if(params)
-                        free(params);
+                    //Debug print
+                    printf("\rNo of frames converted : %d in %lf seconds\n", params->frameCount, ((double)timeelapsed/1000.0));
+                    printf("Display resolution of each frame is %dx%d\n", params->width, params->height);
 
-                    //Free source buffer
-                    if(src_buf)
-                        free(src_buf);
-
-                    //Free destination buffer
-                    if(dst_buf)
-                        free(dst_buf);
+                    //deinit params
+                    nv12tile_params_deinit(params);
 
                     //Close output file
                     close(outfile);
-
-                    printf("\rNo of frames converted : %d in %lf seconds\n",frameCount,((double)timeelapsed/1000.0));
-                    //NOTE : width here is actual width
-                    printf("Display resolution of each frame is %dx%d\n", width, height);
                 }
                 else
                 {
@@ -515,7 +561,7 @@ int main(int argc, char* argv[])
     }
     else
     {
-        printf("Usage: %s input_file width height output_file\n",argv[0]);
+        printf("Usage: %s input_file width height output_file\n", argv[0]);
     }
 
     return 0;

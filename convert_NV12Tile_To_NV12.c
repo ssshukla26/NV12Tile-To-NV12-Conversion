@@ -25,7 +25,7 @@
  * frame_size_src_Y     - Size of Luma Plane
  * frame_size_src_UV    - Size of Chroma Plane
  * */
-typedef struct nv12tile_params {
+struct nv12tile_params {
     int width;
     int height;
     int ex_width;
@@ -37,6 +37,7 @@ typedef struct nv12tile_params {
     int frame_size_src_UV;
     int frame_size_src;
     int frame_size_dst;
+    int max_rows_dst;
     pixel *src_buf;
     pixel *dst_buf;
     int frameCount;
@@ -88,49 +89,62 @@ int calc_plane_size(int wTiles, int hTiles)
  * */
 struct nv12tile_params *nv12tile_params_init(int _width, int _height)
 {
-    struct nv12tile_params *params = calloc(1, sizeof(struct nv12tile_params));
+    struct nv12tile_params *params = NULL;
 
-    //width
-    params->width = _width;
+    if(NULL != (params = calloc(1, sizeof(struct nv12tile_params)))) {
 
-    //height
-    params->height = _height;
+        //width
+        params->width = _width;
 
-    //Extrapolate width
-    params->ex_width = ROUND_UP_X(params->width, 128);
+        //height
+        params->height = _height;
 
-    //Extrapolate height
-    params->ex_height = ROUND_UP_X(params->height, 32);
+        //Extrapolate width
+        params->ex_width = ROUND_UP_X(params->width, 128);
 
-    //Minimum no of columns required
-    params->wTiles = calc_wTiles(params->width);
+        //Extrapolate height
+        params->ex_height = ROUND_UP_X(params->height, 32);
 
-    //Minimum no of rows required for Y plane
-    params->hTiles = calc_hTiles(params->height);
+        //Minimum no of columns required
+        params->wTiles = calc_wTiles(params->width);
 
-    //Minimum no of rows required for UV plane
-    params->hTiles_UV = calc_hTiles(params->height/2);
+        //Minimum no of rows required for Y plane
+        params->hTiles = calc_hTiles(params->height);
 
-    //Size of Luma/Y Plane
-    params->frame_size_src_Y = calc_plane_size(params->wTiles, params->hTiles);
+        //Minimum no of rows required for UV plane
+        params->hTiles_UV = calc_hTiles(params->height/2);
 
-    //Size of Chroma/UV Plane
-    params->frame_size_src_UV = calc_plane_size(params->wTiles, params->hTiles_UV);
+        //Size of Luma/Y Plane
+        params->frame_size_src_Y = calc_plane_size(params->wTiles, params->hTiles);
 
-    //Size of a single frame in source, source is in nv12 tile format
-    params->frame_size_src = params->frame_size_src_Y + params->frame_size_src_UV;
+        //Size of Chroma/UV Plane
+        params->frame_size_src_UV = calc_plane_size(params->wTiles, params->hTiles_UV);
 
-    //Size of a single frame in destination, destination is in nv12 format
-    params->frame_size_dst = (params->width * params->height * 3)/2;
+        //Size of a single frame in source, source is in nv12 tile format
+        params->frame_size_src = params->frame_size_src_Y + params->frame_size_src_UV;
 
-    //Buffer to accumulate a frame from the source
-    params->src_buf = (pixel *) calloc(1, params->frame_size_src * sizeof(pixel));
+        //Size of a single frame in destination, destination is in nv12 format
+        params->frame_size_dst = (params->width * params->height * 3)/2;
 
-    //Buffer to accumulate a frame for the destination
-    params->dst_buf = (pixel *) calloc(1, params->frame_size_src * sizeof(pixel));
+        //Max no. of rows in destination buffer
+        params->max_rows_dst = ((params->height * 3)/2);
 
-    //Variable to count no of frames converted from tile to linear format i.e. nv12 tile to nv12 format
-    params->frameCount = 1;
+
+        //Buffer to accumulate a frame from the source
+        if(NULL == (params->src_buf = (pixel *) calloc(1, params->frame_size_src * sizeof(pixel)))) {
+            printf("Error: allocating source buffer\n");
+            return NULL;
+        }
+
+        //Buffer to accumulate a frame for the destination
+        if(NULL == (params->dst_buf = (pixel *) calloc(1, params->frame_size_src * sizeof(pixel)))) {
+            printf("Error: allocation destination buffer\n");
+            return NULL;
+        }
+
+        //Variable to count no of frames converted from tile to linear format i.e. nv12 tile to nv12 format
+        params->frameCount = 1;
+    }
 
     return params;
 }
@@ -170,8 +184,8 @@ void copyTile(pixel *dst, pixel **src, int wTiles)
     int loop = 0;
 
     //Run loop for all rows in a tile i.e. from row 0 to row 31
-    for(loop=0;loop<32;loop++)
-    {
+    for(loop=0;loop<32;loop++) {
+
         //Copy a single row from source to destination
         memcpy(dst, *src, 64 * sizeof(pixel));
 
@@ -207,19 +221,19 @@ void NV12TileToNV12(pixel *dst_head, pixel *src_head, int wTiles, int hTiles)
     pixel *dst = dst_head;
 
     //For a proper Z Flip Z pattern two consecutive row are needed to be processed
-    for(loop = 0; loop < (hTiles%2 == 0 ? hTiles : hTiles-1); loop=loop+2)
-    {
+    for(loop = 0; loop < (hTiles%2 == 0 ? hTiles : hTiles-1); loop=loop+2) {
+
         //Put src pointer at start of current row
         src = src_head;
 
         //Copy Z and flip Z pattern to destination
-        for(Z = 0; Z < (wTiles/2); Z++)
-        {
+        for(Z = 0; Z < (wTiles/2); Z++) {
+
             //Put dst pointer at start of current row
             dst = dst_head;
 
-            if(Z%2 == 0)
-            {
+            if(Z%2 == 0) {
+
                 //For Z pattern
 
                 //Tile Nos: 0-8-16-...
@@ -239,8 +253,8 @@ void NV12TileToNV12(pixel *dst_head, pixel *src_head, int wTiles, int hTiles)
                 dst = dst + 64;
                 copyTile(dst, &src, wTiles);
             }
-            else
-            {
+            else {
+
                 //For Flip Z pattern
 
                 //Tile Nos: 4-12-...
@@ -270,14 +284,14 @@ void NV12TileToNV12(pixel *dst_head, pixel *src_head, int wTiles, int hTiles)
     }
 
     //For linear pattern in the last remaining row
-    if(hTiles%2)
-    {
+    if(hTiles%2) {
+
         //Put src pointer at start of current row
         src = src_head;
 
         //Loop through linear tiles
-        for(loop = 0; loop < wTiles ; loop++)
-        {
+        for(loop = 0; loop < wTiles ; loop++) {
+
             dst = dst_head + (loop * 64);
             copyTile(dst, &src, wTiles);
         }
@@ -295,17 +309,14 @@ void ConvertToActualNV12(struct nv12tile_params *params)
 {
     //Check if width is not equal to extrapolated width
     //then perform the conversion
-    if(params->width != params->ex_width)
-    {
+    if(params->width != params->ex_width) {
+
         //Index of current row
         int index = 0;
 
-        //Max no. of rows in data buffer
-        int uptoIndex = ((params->height * 3)/2);
-
         //Convert extrapolated NV12 data to actual NV12 data
-        while(index < uptoIndex)
-        {
+        while(index < params->max_rows_dst) {
+
             //Rectify each strides in destination buffer containing extrapolated data,
             //so that each strides will contain actual data.
             memcpy(params->dst_buf + (index * params->width),
@@ -373,8 +384,8 @@ void NV12toYUV420Planner(pixel *dst_buf, pixel *src_buf, int width, int height)
 
     //Convert interleaved UV to planner UV and Copy to destination buffer
     int i, j;
-    for(i = 0, j = 0; i < (single_chroma_plane_len * 2); i=i+2, j++)
-    {
+    for(i = 0, j = 0; i < (single_chroma_plane_len * 2); i=i+2, j++) {
+
         //Copy U Component
         dst_chroma[j] = src_chroma[i];
         //Copy V Component
@@ -404,18 +415,18 @@ void read_convert_write(struct nv12tile_params *params, int infile, int outfile)
 {
     //Loop to convert nv12 tile formated frames in input file to nv12 format
     //and store it in a output file
-    while(1)
-    {
+    while(1) {
+
         //Read from source file
-        if(params->frame_size_src == read(infile, params->src_buf, params->frame_size_src))
-        {
+        if(params->frame_size_src == read(infile, params->src_buf, params->frame_size_src)) {
+
             //Convert frames from NV12 tile format to NV12 format
             ConvertNV12TileToNV12Frame(params);
 
             //If required format of output frame is yuv420p
             //then covert NV12 data to yuv420 planner data
-            if(strcmp(OUTPUT_FORMAT, "yuv420p") == 0)
-            {
+            if(strcmp(OUTPUT_FORMAT, "yuv420p") == 0) {
+
                 //NOTE : using the same source and destination buffers
                 //as used in nv12 tile to nv12 conversion.
 
@@ -435,14 +446,14 @@ void read_convert_write(struct nv12tile_params *params, int infile, int outfile)
             }
 
             //Write to destination file
-            if(params->frame_size_dst != write(outfile, params->dst_buf, params->frame_size_dst))
-            {
+            if(params->frame_size_dst != write(outfile, params->dst_buf, params->frame_size_dst)) {
+
                 perror("Error writing output file :");
                 break;
             }
         }
-        else
-        {
+        else {
+
             //EOF reached
             break;
         }
@@ -479,60 +490,65 @@ long stopTimer(struct timeval *t_start)
 int main(int argc, char *argv[])
 {
     //Check : command line must consist of all required arguments
-    if(5 == argc)
-    {
+    if(5 == argc) {
+
         //Check : input and output file shouldn't be same
-        if(strcmp(argv[1], argv[4]) != 0)
-        {
+        if(strcmp(argv[1], argv[4]) != 0) {
+
             int infile = -1;
+
             //Open input/source file for reading
-            if(-1 != (infile = open(argv[1], O_RDONLY)))
-            {
+            if(-1 != (infile = open(argv[1], O_RDONLY))) {
+
                 int outfile = -1;
+
                 //Open output/destination file for writing
-                if(-1 != (outfile = open(argv[4], O_WRONLY | O_CREAT, 0775)))
-                {
+                if(-1 != (outfile = open(argv[4], O_WRONLY | O_CREAT, 0775))) {
+
                     //Initialize parameters needed for a nv12 tile buffer
-                    struct nv12tile_params *params = nv12tile_params_init(atoi(argv[2]), atoi(argv[3]));
+                    struct nv12tile_params *params = NULL;
 
-                    //Debug print
-                    printf("TILE_SIZE = %d\n"
-                            "wTiles=%d(%d)->(%d)\n"
-                            "hTiles=%d(%d)->(%d)\n"
-                            "hTiles_UV=%d\n"
-                            "frame_size_src_Y=%d\n"
-                            "frame_size_src_UV=%d\n"
-                            "frame_size_src=%d\n"
-                            "frame_size_dst=%d\n",
-                            TILE_SIZE,
-                            params->wTiles,
-                            params->width,
-                            params->ex_width,
-                            params->hTiles,
-                            params->height,
-                            params->ex_height,
-                            params->hTiles_UV,
-                            params->frame_size_src_Y,
-                            params->frame_size_src_UV,
-                            params->frame_size_src,
-                            params->frame_size_dst);
+                    if(NULL != (params = nv12tile_params_init(atoi(argv[2]), atoi(argv[3])))) {
 
-                    //Variables required to calculate time elapsed for converting N (frameCount) frames
-                    struct timeval start;
-                    long timeelapsed = 0;
+                        //Debug print
+                        printf("TILE_SIZE = %d\n"
+                                "wTiles=%d(%d)->(%d)\n"
+                                "hTiles=%d(%d)->(%d)\n"
+                                "hTiles_UV=%d\n"
+                                "frame_size_src_Y=%d\n"
+                                "frame_size_src_UV=%d\n"
+                                "frame_size_src=%d\n"
+                                "frame_size_dst=%d\n",
+                                TILE_SIZE,
+                                params->wTiles,
+                                params->width,
+                                params->ex_width,
+                                params->hTiles,
+                                params->height,
+                                params->ex_height,
+                                params->hTiles_UV,
+                                params->frame_size_src_Y,
+                                params->frame_size_src_UV,
+                                params->frame_size_src,
+                                params->frame_size_dst);
 
-                    //Start timer
-                    startTimer(&start);
+                        //Variables required to calculate time elapsed for converting N (frameCount) frames
+                        struct timeval start;
+                        long timeelapsed = 0;
 
-                    //Read from infile, convert frames and write to outfile
-                    read_convert_write(params, infile, outfile);
+                        //Start timer
+                        startTimer(&start);
 
-                    //Stop timer
-                    timeelapsed = stopTimer(&start);
+                        //Read from infile, convert frames and write to outfile
+                        read_convert_write(params, infile, outfile);
 
-                    //Debug print
-                    printf("\rNo of frames converted : %d in %lf seconds\n", params->frameCount, ((double)timeelapsed/1000.0));
-                    printf("Display resolution of each frame is %dx%d\n", params->width, params->height);
+                        //Stop timer
+                        timeelapsed = stopTimer(&start);
+
+                        //Debug print
+                        printf("\rNo of frames converted : %d in %lf seconds\n", params->frameCount, ((double)timeelapsed/1000.0));
+                        printf("Display resolution of each frame is %dx%d\n", params->width, params->height);
+                    }
 
                     //deinit params
                     nv12tile_params_deinit(params);
@@ -540,27 +556,27 @@ int main(int argc, char *argv[])
                     //Close output file
                     close(outfile);
                 }
-                else
-                {
+                else {
+
                     perror("Unable to open output file :");
                 }
 
                 //Close input file
                 close(infile);
             }
-            else
-            {
+            else {
+
                 perror("Unable to open input file :");
             }
         }
-        else
-        {
+        else {
+
             printf("Input file name and output file name can't be same\n");
         }
 
     }
-    else
-    {
+    else {
+
         printf("Usage: %s input_file width height output_file\n", argv[0]);
     }
 
